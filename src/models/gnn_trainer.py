@@ -59,13 +59,14 @@ def crac_features(data: dict, t_idx: np.ndarray, graph: HallGraph,
 def fit_normalizer(data: dict, idx: np.ndarray, spec: WindowSpec,
                    horizon_steps: int, hall: str) -> Normalizer:
     """Fit on one hall's training fold. Call once, then carry it everywhere."""
-    f = node_features(data, idx, spec).reshape(-1, len(feature_names(spec.lags)))
+    f = node_features(data, idx, spec, horizon_steps=horizon_steps)
+    f = f.reshape(-1, len(feature_names(spec.lags)))
     y = targets(data, idx, horizon_steps).reshape(-1)
     return Normalizer.fit(f, y, hall, feature_names(spec.lags))
 
 
 def _batch(data, idx, spec, horizon_steps, graph, flow_share, nz, device):
-    rx = node_features(data, idx, spec)
+    rx = node_features(data, idx, spec, horizon_steps=horizon_steps)
     rx = nz.transform(rx.reshape(-1, rx.shape[-1])).reshape(rx.shape).astype(np.float32)
     cx = crac_features(data, idx, graph, flow_share)
     y = targets(data, idx, horizon_steps)

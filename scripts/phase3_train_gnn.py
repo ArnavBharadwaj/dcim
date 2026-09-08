@@ -18,11 +18,14 @@ import pathlib
 import sys
 
 import numpy as np
-import torch
 import yaml
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
+
+# torch must be imported before lightgbm on macOS arm64, and LightGBM must stay
+# single-threaded. See the note in src/models/lgbm.py.
+import torch  # noqa: E402,F401
 
 from src.data.dataset import WindowSpec, targets                       # noqa: E402
 from src.data.generate import load                                     # noqa: E402

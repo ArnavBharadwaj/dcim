@@ -52,8 +52,8 @@ class RCNetwork:
         return out
 
     def _design(self, rack: int, inlet: np.ndarray, power_kw: np.ndarray,
-                supply: np.ndarray) -> np.ndarray:
-        """(S, 3 + k) design matrix for one rack, including an intercept.
+                supply: np.ndarray, fan: np.ndarray) -> np.ndarray:
+        """(S, 4 + k) design matrix for one rack, including an intercept.
 
         The intercept matters. Near equilibrium the driving terms are large and nearly
         cancel -- rack power is around 20 kW while (T_supply - T_i) is around -5 K --
@@ -64,21 +64,27 @@ class RCNetwork:
         """
         nb = self._neighbours[rack]
         t_i = inlet[:, rack]
-        cols = [np.ones_like(t_i), power_kw[:, rack], supply - t_i]
+        gap = supply - t_i
+        # The conductance to the supply air scales with how much air the CRACs are
+        # moving, so fan speed enters as a modulation of that conductance rather than
+        # as a free additive term. This keeps the model an RC network while giving it
+        # the same plant information every other baseline receives -- without it, RC
+        # was the only model blind to fan speed and it scored worse than persistence.
+        cols = [np.ones_like(t_i), power_kw[:, rack], gap, fan * gap]
         if nb.size:
             cols.extend((inlet[:, nb] - t_i[:, None]).T)
         return np.column_stack(cols)
 
     def fit(self, inlet: np.ndarray, power_kw: np.ndarray, supply: np.ndarray,
-            target_delta: np.ndarray) -> "RCNetwork":
-        """inlet/power (S, N), supply (S,), target_delta (S, N)."""
+            fan: np.ndarray, target_delta: np.ndarray) -> "RCNetwork":
+        """inlet/power (S, N), supply and fan (S,), target_delta (S, N)."""
         if inlet.shape != power_kw.shape or inlet.shape != target_delta.shape:
             raise ValueError("inlet, power and target must share shape (S, N)")
         if inlet.shape[1] != self.n_racks:
             raise ValueError(f"expected {self.n_racks} racks, got {inlet.shape[1]}")
         self.coef_, self._scale = [], []
         for rack in range(self.n_racks):
-            X = self._design(rack, inlet, power_kw, supply)
+            X = self._design(rack, inlet, power_kw, supply, fan)
             # Standardise the non-constant columns before solving. Neighbouring racks
             # move together and the columns differ in scale by orders of magnitude, so
             # the raw normal equations are badly conditioned.
@@ -93,12 +99,13 @@ class RCNetwork:
         return self
 
     def predict_delta(self, inlet: np.ndarray, power_kw: np.ndarray,
-                      supply: np.ndarray) -> np.ndarray:
+                      supply: np.ndarray, fan: np.ndarray) -> np.ndarray:
         if not self.coef_:
             raise RuntimeError("call fit() before predict_delta()")
         out = np.empty((inlet.shape[0], self.n_racks))
         for rack in range(self.n_racks):
-            out[:, rack] = self._design(rack, inlet, power_kw, supply) @ self.coef_[rack]
+            out[:, rack] = (self._design(rack, inlet, power_kw, supply, fan)
+                            @ self.coef_[rack])
         return out
 
     @property

@@ -20,6 +20,20 @@ import numpy as np
 class LightGBMRegressor:
     name = "lightgbm"
 
+    # Single-threaded on purpose. LightGBM and torch each ship an OpenMP runtime, and
+    # on macOS arm64 they cannot both use a thread pool in one process. Measured here:
+    #
+    #   import torch, then lightgbm, n_jobs=-1  -> segfault, exit 139, no traceback
+    #   import torch, then lightgbm, n_jobs=1   -> fine
+    #   import lightgbm, then torch, any n_jobs -> lightgbm fine, torch_geometric
+    #                                              then segfaults instead
+    #
+    # Under a shell pipeline the crash is invisible: the pipe's status is reported, so
+    # the run looks successful and silently produces nothing. Importing torch first and
+    # keeping LightGBM to one thread is the only combination where both libraries work,
+    # and a slower fit is a fair price for not having to trust a crashing process.
+    N_JOBS = 1
+
     def __init__(self, k_neighbours: int, seed: int = 0, n_estimators: int = 400,
                  learning_rate: float = 0.05, num_leaves: int = 63,
                  min_child_samples: int = 40, subsample: float = 0.8,
@@ -29,7 +43,7 @@ class LightGBMRegressor:
             n_estimators=n_estimators, learning_rate=learning_rate,
             num_leaves=num_leaves, min_child_samples=min_child_samples,
             subsample=subsample, subsample_freq=1, colsample_bytree=colsample_bytree,
-            random_state=seed, n_jobs=-1, verbose=-1)
+            random_state=seed, n_jobs=self.N_JOBS, verbose=-1)
         self.model = None
 
     def fit(self, X: np.ndarray, y: np.ndarray,

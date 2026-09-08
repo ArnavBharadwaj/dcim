@@ -28,6 +28,10 @@ import yaml
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
+# torch must be imported before lightgbm on macOS arm64, and LightGBM must stay
+# single-threaded. See the note in src/models/lgbm.py.
+import torch  # noqa: E402,F401
+
 from src.data.dataset import (Normalizer, WindowSpec, feature_names, flatten,  # noqa: E402
                               neighbour_index, node_features, targets)
 from src.data.generate import load                                       # noqa: E402
@@ -78,7 +82,7 @@ def run_lstm(train_data, test_data, cfg, seed, horizon_steps, lags, device):
 
     torch.manual_seed(seed)
     (d_tr, idx_tr), (d_te, idx_te) = train_data, test_data
-    xs = sequence_features(d_tr, idx_tr, lags)                 # (S, N, L, F)
+    xs = sequence_features(d_tr, idx_tr, lags, horizon_steps)  # (S, N, L, F)
     ys = targets(d_tr, idx_tr, horizon_steps)
     s, n, L, f = xs.shape
     xs = torch.from_numpy(xs.reshape(s * n, L, f))
@@ -101,7 +105,8 @@ def run_lstm(train_data, test_data, cfg, seed, horizon_steps, lags, device):
             opt.step()
 
     model.eval()
-    xt = torch.from_numpy(sequence_features(d_te, idx_te, lags).reshape(-1, L, f))
+    xt = torch.from_numpy(
+        sequence_features(d_te, idx_te, lags, horizon_steps).reshape(-1, L, f))
     xt = (xt - mu) / sd
     preds = []
     with torch.no_grad():
@@ -156,6 +161,13 @@ def main() -> None:
                                 stride=cfg["sample_stride"])
         y_te = targets(data, idx_te, hs)
         last_te = data["inlet"][idx_te]
+        # The plant's planned supply over the horizon. A twin is asked "if I set the
+        # plant to this, what happens", so the RC baseline gets the horizon-mean
+        # setpoint rather than the value at t, matching what the feature-based models
+        # receive through the control-plan block.
+        offs = np.arange(1, hs + 1)
+        sup_te = data["supply_temp"][idx_te[:, None] + offs].mean(axis=1)
+        fan_te = data["fan_frac"][idx_te[:, None] + offs].mean(axis=1)
         print(f"--- horizon {horizon_s}s ({hs} steps): "
               f"{idx_tr_full.size:,} train / {idx_te.size:,} test timesteps  "
               f"| target delta std {y_te.std():.4f} K")
@@ -163,6 +175,8 @@ def main() -> None:
         for seed in cfg["seeds"]:
             idx_tr = subsample(idx_tr_full, seed, cfg["max_train_rows"], geom.n_racks)
             y_tr = targets(data, idx_tr, hs)
+            sup_tr = data["supply_temp"][idx_tr[:, None] + offs].mean(axis=1)
+            fan_tr = data["fan_frac"][idx_tr[:, None] + offs].mean(axis=1)
 
             def record(model_name, pred, extra=None, elapsed=0.0):
                 m = evaluate(pred, y_te, last_te)
@@ -186,10 +200,9 @@ def main() -> None:
                 t0 = time.time()
                 rc = RCNetwork(graph, ridge=cfg["rc"]["ridge"]).fit(
                     data["inlet"][idx_tr], data["power"][idx_tr] / 1e3,
-                    data["supply_temp"][idx_tr], y_tr)
+                    sup_tr, fan_tr, y_tr)
                 pred = rc.predict_delta(data["inlet"][idx_te],
-                                        data["power"][idx_te] / 1e3,
-                                        data["supply_temp"][idx_te])
+                                        data["power"][idx_te] / 1e3, sup_te, fan_te)
                 record("rc", pred, {"n_parameters": rc.n_parameters},
                        time.time() - t0)
 
@@ -198,8 +211,10 @@ def main() -> None:
                 for k in cfg["lightgbm"]["k_neighbours"]:
                     t0 = time.time()
                     nb = neighbour_index(geom, k)
-                    Xtr, ytr = flatten(node_features(data, idx_tr, spec, nb), y_tr)
-                    Xte, _ = flatten(node_features(data, idx_te, spec, nb), y_te)
+                    Xtr, ytr = flatten(
+                        node_features(data, idx_tr, spec, nb, horizon_steps=hs), y_tr)
+                    Xte, _ = flatten(
+                        node_features(data, idx_te, spec, nb, horizon_steps=hs), y_te)
                     nz = Normalizer.fit(Xtr, ytr, hall, feature_names(lags, k))
                     model = LightGBMRegressor(
                         k, seed=seed,

@@ -11,9 +11,9 @@ Two rules from the brief are enforced here rather than by convention:
 import numpy as np
 import pytest
 
-from src.data.dataset import (GLOBAL_FEATURES, Normalizer, WindowSpec,
-                              feature_names, flatten, neighbour_index,
-                              node_features, targets)
+from src.data.dataset import (GLOBAL_FEATURES, PLAN_FEATURES, Normalizer,
+                              WindowSpec, control_plan, feature_names, flatten,
+                              neighbour_index, node_features, targets)
 from src.twin.geometry import build_hall
 
 
@@ -34,7 +34,7 @@ def fake_data():
 def test_feature_count_matches_names(fake_data):
     spec = WindowSpec(lags=4)
     idx = np.arange(10, 100)
-    f = node_features(fake_data, idx, spec)
+    f = node_features(fake_data, idx, spec, horizon_steps=10)
     assert f.shape == (idx.size, 12, len(feature_names(spec.lags)))
 
 
@@ -42,8 +42,47 @@ def test_feature_count_matches_names_with_neighbours(fake_data, hall_cfg):
     spec = WindowSpec(lags=4)
     geom = build_hall(dict(hall_cfg, rows=4, racks_per_row=3))
     nb = neighbour_index(geom, 4)
-    f = node_features(fake_data, np.arange(10, 100), spec, nb)
+    f = node_features(fake_data, np.arange(10, 100), spec, nb, horizon_steps=10)
     assert f.shape[-1] == len(feature_names(spec.lags, 4))
+
+
+def test_control_plan_features_are_deltas_from_t(fake_data):
+    """The plan block must be expressed relative to the value at t, so it carries no
+    absolute setpoint and transfers between halls with different envelopes."""
+    idx = np.arange(10, 60)
+    h = 10
+    plan = control_plan(fake_data, idx, h)
+    assert plan.shape == (idx.size, len(PLAN_FEATURES))
+    np.testing.assert_allclose(
+        plan[:, 0], fake_data["supply_temp"][idx + h] - fake_data["supply_temp"][idx],
+        rtol=1e-5)
+    np.testing.assert_allclose(
+        plan[:, 1], fake_data["fan_frac"][idx + h] - fake_data["fan_frac"][idx],
+        rtol=1e-5)
+
+
+def test_control_plan_is_zero_when_the_plant_does_not_move(fake_data):
+    flat = dict(fake_data)
+    flat["supply_temp"] = np.full_like(fake_data["supply_temp"], 19.0)
+    flat["fan_frac"] = np.full_like(fake_data["fan_frac"], 0.8)
+    plan = control_plan(flat, np.arange(10, 60), 10)
+    np.testing.assert_allclose(plan, 0.0, atol=1e-6)
+
+
+def test_control_plan_is_broadcast_to_every_rack(fake_data):
+    spec = WindowSpec(lags=3)
+    idx = np.arange(5, 40)
+    f = node_features(fake_data, idx, spec, horizon_steps=10)
+    names = feature_names(spec.lags)
+    for g in PLAN_FEATURES:
+        col = f[:, :, names.index(g)]
+        assert np.allclose(col, col[:, :1]), f"{g} must be the same at every rack"
+
+
+def test_features_omit_the_plan_when_no_horizon_is_given(fake_data):
+    spec = WindowSpec(lags=3)
+    f = node_features(fake_data, np.arange(5, 40), spec)
+    assert f.shape[-1] == len(feature_names(spec.lags, with_plan=False))
 
 
 def test_features_carry_no_rack_identity(fake_data):
@@ -54,11 +93,11 @@ def test_features_carry_no_rack_identity(fake_data):
     """
     spec = WindowSpec(lags=4)
     idx = np.arange(10, 60)
-    base = node_features(fake_data, idx, spec)
+    base = node_features(fake_data, idx, spec, horizon_steps=10)
 
     perm = np.random.default_rng(1).permutation(12)
     shuffled = {k: (v[:, perm] if v.ndim == 2 else v) for k, v in fake_data.items()}
-    after = node_features(shuffled, idx, spec)
+    after = node_features(shuffled, idx, spec, horizon_steps=10)
     np.testing.assert_allclose(after, base[:, perm], rtol=1e-6)
 
 
@@ -66,15 +105,16 @@ def test_features_are_invariant_to_hall_size(fake_data):
     """The per-node feature block must not encode how many racks there are."""
     spec = WindowSpec(lags=3)
     idx = np.arange(5, 40)
-    full = node_features(fake_data, idx, spec)
+    full = node_features(fake_data, idx, spec, horizon_steps=10)
     subset = {k: (v[:, :6] if v.ndim == 2 else v) for k, v in fake_data.items()}
-    np.testing.assert_allclose(node_features(subset, idx, spec), full[:, :6], rtol=1e-6)
+    np.testing.assert_allclose(node_features(subset, idx, spec, horizon_steps=10),
+                               full[:, :6], rtol=1e-6)
 
 
 def test_global_features_are_broadcast_identically(fake_data):
     spec = WindowSpec(lags=3)
     idx = np.arange(5, 40)
-    f = node_features(fake_data, idx, spec)
+    f = node_features(fake_data, idx, spec, horizon_steps=10)
     names = feature_names(spec.lags)
     for g in GLOBAL_FEATURES:
         col = f[:, :, names.index(g)]
@@ -84,7 +124,7 @@ def test_global_features_are_broadcast_identically(fake_data):
 def test_lag_zero_is_the_current_step(fake_data):
     spec = WindowSpec(lags=4)
     idx = np.arange(10, 50)
-    f = node_features(fake_data, idx, spec)
+    f = node_features(fake_data, idx, spec, horizon_steps=10)
     names = feature_names(spec.lags)
     np.testing.assert_allclose(f[:, :, names.index("util_lag0")],
                                fake_data["util"][idx], rtol=1e-6)
@@ -104,14 +144,15 @@ def test_normalizer_fits_on_one_hall_and_does_not_move(fake_data):
     the normaliser on another hall must not update them."""
     spec = WindowSpec(lags=3)
     idx = np.arange(5, 100)
-    X, y = flatten(node_features(fake_data, idx, spec),
+    X, y = flatten(node_features(fake_data, idx, spec, horizon_steps=10),
                    targets(fake_data, idx, 10))
     nz = Normalizer.fit(X, y, "hall_a", feature_names(spec.lags))
     before = (nz.mean.copy(), nz.scale.copy(), nz.target_mean, nz.target_scale)
 
     other = {k: (v * 3.0 + 40.0 if v.ndim == 2 else v * 1.5)
              for k, v in fake_data.items()}
-    nz.transform(flatten(node_features(other, idx, spec), targets(other, idx, 10))[0])
+    nz.transform(flatten(node_features(other, idx, spec, horizon_steps=10),
+                         targets(other, idx, 10))[0])
 
     np.testing.assert_array_equal(nz.mean, before[0])
     np.testing.assert_array_equal(nz.scale, before[1])
@@ -122,7 +163,8 @@ def test_normalizer_fits_on_one_hall_and_does_not_move(fake_data):
 def test_normalizer_round_trips(fake_data):
     spec = WindowSpec(lags=3)
     idx = np.arange(5, 100)
-    X, y = flatten(node_features(fake_data, idx, spec), targets(fake_data, idx, 10))
+    X, y = flatten(node_features(fake_data, idx, spec, horizon_steps=10),
+                   targets(fake_data, idx, 10))
     nz = Normalizer.fit(X, y, "hall_a", feature_names(spec.lags))
     np.testing.assert_allclose(nz.inverse_target(nz.transform_target(y)), y, rtol=1e-5)
     z = nz.transform(X)

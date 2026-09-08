@@ -14,6 +14,7 @@ dependencies = [
     "torch>=2.4",
     "torch-geometric>=2.6",
     "lightgbm>=4.3",
+    "scikit-learn>=1.4",
 ]
 
 [project.optional-dependencies]

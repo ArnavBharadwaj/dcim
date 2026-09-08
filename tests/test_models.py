@@ -28,7 +28,8 @@ def rc_setup(hall_cfg):
     inlet = 20.0 + rng.normal(0, 2.0, (s, n))
     power = rng.uniform(8.0, 34.0, (s, n))
     supply = rng.uniform(16.0, 21.0, s)
-    return graph, inlet, power, supply, n
+    fan = rng.uniform(0.55, 1.0, s)
+    return graph, inlet, power, supply, fan, n
 
 
 def test_rc_beats_the_zero_predictor_on_its_own_training_data(rc_setup):
@@ -36,13 +37,15 @@ def test_rc_beats_the_zero_predictor_on_its_own_training_data(rc_setup):
     fitted to. It once was: without an intercept, the large driving terms had to
     cancel exactly and small coefficient errors swamped the target.
     """
-    graph, inlet, power, supply, n = rc_setup
+    graph, inlet, power, supply, fan, n = rc_setup
     rng = np.random.default_rng(1)
     # A target genuinely explained by the RC form: own power, coupling to the supply,
     # and coupling to neighbours.
-    true = 0.004 * power + 0.02 * (supply[:, None] - inlet) + rng.normal(0, 0.01, inlet.shape)
-    rc = RCNetwork(graph).fit(inlet, power, supply, true)
-    pred = rc.predict_delta(inlet, power, supply)
+    true = (0.004 * power + 0.02 * (supply[:, None] - inlet)
+            + 0.01 * fan[:, None] * (supply[:, None] - inlet)
+            + rng.normal(0, 0.01, inlet.shape))
+    rc = RCNetwork(graph).fit(inlet, power, supply, fan, true)
+    pred = rc.predict_delta(inlet, power, supply, fan)
     rmse_fit = np.sqrt(np.mean((pred - true) ** 2))
     rmse_zero = np.sqrt(np.mean(true ** 2))
     assert rmse_fit < rmse_zero, f"fit {rmse_fit:.4f} vs zero {rmse_zero:.4f}"
@@ -50,33 +53,34 @@ def test_rc_beats_the_zero_predictor_on_its_own_training_data(rc_setup):
 
 def test_rc_recovers_a_known_linear_response(rc_setup):
     """With a noiseless target of exactly the RC form, the fit should be near-exact."""
-    graph, inlet, power, supply, n = rc_setup
-    true = 0.003 * power + 0.015 * (supply[:, None] - inlet)
-    rc = RCNetwork(graph).fit(inlet, power, supply, true)
-    pred = rc.predict_delta(inlet, power, supply)
+    graph, inlet, power, supply, fan, n = rc_setup
+    true = (0.003 * power + 0.015 * (supply[:, None] - inlet)
+            + 0.008 * fan[:, None] * (supply[:, None] - inlet))
+    rc = RCNetwork(graph).fit(inlet, power, supply, fan, true)
+    pred = rc.predict_delta(inlet, power, supply, fan)
     assert np.sqrt(np.mean((pred - true) ** 2)) < 1e-3
 
 
 def test_rc_has_one_capacitance_per_rack_and_one_conductance_per_edge(rc_setup):
-    graph, inlet, power, supply, n = rc_setup
-    rc = RCNetwork(graph).fit(inlet, power, supply, np.zeros_like(inlet))
+    graph, inlet, power, supply, fan, n = rc_setup
+    rc = RCNetwork(graph).fit(inlet, power, supply, fan, np.zeros_like(inlet))
     assert len(rc.coef_) == n
-    # intercept + power + supply coupling + one per incoming rack-to-rack neighbour
+    # intercept + power + supply coupling + fan-modulated coupling + one per neighbour
     for rack in range(n):
-        assert rc.coef_[rack].size == 3 + rc._neighbours[rack].size
+        assert rc.coef_[rack].size == 4 + rc._neighbours[rack].size
 
 
 def test_rc_rejects_shape_mismatch(rc_setup):
-    graph, inlet, power, supply, n = rc_setup
+    graph, inlet, power, supply, fan, n = rc_setup
     rc = RCNetwork(graph)
     with pytest.raises(ValueError, match="share shape"):
-        rc.fit(inlet, power[:, :-1], supply, inlet)
+        rc.fit(inlet, power[:, :-1], supply, fan, inlet)
 
 
 def test_rc_predict_before_fit_is_an_error(rc_setup):
-    graph, inlet, power, supply, n = rc_setup
+    graph, inlet, power, supply, fan, n = rc_setup
     with pytest.raises(RuntimeError, match="fit"):
-        RCNetwork(graph).predict_delta(inlet, power, supply)
+        RCNetwork(graph).predict_delta(inlet, power, supply, fan)
 
 
 def test_gnn_output_shape_is_hall_independent(hall_cfg):
@@ -130,3 +134,16 @@ def test_gnn_without_edge_features_ignores_them(hall_cfg):
         a = m(rx, cx, ei, ea)
         b = m(rx, cx, ei, torch.randn_like(ea) * 10.0)
     torch.testing.assert_close(a, b)
+
+
+def test_lightgbm_stays_single_threaded():
+    """Pins the OpenMP workaround documented in src/models/lgbm.py.
+
+    LightGBM and torch each ship an OpenMP runtime and on macOS arm64 they cannot both
+    run a thread pool in one process: with torch imported first and n_jobs=-1,
+    LightGBM's fit segfaults with exit 139, no traceback and no message, which under a
+    shell pipeline looks exactly like a successful run that produced nothing.
+    """
+    from src.models.lgbm import LightGBMRegressor
+    assert LightGBMRegressor.N_JOBS == 1
+    assert LightGBMRegressor(k_neighbours=2).params["n_jobs"] == 1

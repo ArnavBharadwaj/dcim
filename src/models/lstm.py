@@ -36,22 +36,34 @@ class PerRackLSTM(nn.Module):
         return self.head(out[:, -1]).squeeze(-1)
 
 
-def sequence_features(data: dict, t_idx: np.ndarray, lags: int) -> np.ndarray:
+def sequence_features(data: dict, t_idx: np.ndarray, lags: int,
+                      horizon_steps: int | None = None) -> np.ndarray:
     """(S, N, L, F) per-rack sequences, oldest step first.
 
     Strictly local: utilisation, inlet temperature and power for the rack itself, plus
     the plant setpoints. No neighbour information of any kind -- that is the point of
     this baseline.
+
+    The control plan over the horizon is appended as constant channels so this
+    baseline sees exactly the same plant information as every other model. Giving it
+    less would make the comparison a statement about the inputs rather than about
+    spatial structure.
     """
+    from ..data.dataset import control_plan
+
     util, inlet, power = data["util"], data["inlet"], data["power"]
     supply, fan = data["supply_temp"], data["fan_frac"]
+    n = util.shape[1]
+    plan = (control_plan(data, t_idx, horizon_steps)
+            if horizon_steps is not None else None)
     steps = []
     for i in range(lags - 1, -1, -1):          # oldest first
         idx = t_idx - i
-        n = util.shape[1]
-        steps.append(np.stack([
-            util[idx], inlet[idx], power[idx] / 1e3,
-            np.repeat(supply[idx][:, None], n, axis=1),
-            np.repeat(fan[idx][:, None], n, axis=1),
-        ], axis=2))
+        chans = [util[idx], inlet[idx], power[idx] / 1e3,
+                 np.repeat(supply[idx][:, None], n, axis=1),
+                 np.repeat(fan[idx][:, None], n, axis=1)]
+        if plan is not None:
+            chans += [np.repeat(plan[:, j][:, None], n, axis=1)
+                      for j in range(plan.shape[1])]
+        steps.append(np.stack(chans, axis=2))
     return np.stack(steps, axis=2).astype(np.float32)
