@@ -22,7 +22,7 @@ from .thermal import ThermalParams, ThermalTwin
 
 HALL_KEYS = {"name", "rows", "racks_per_row", "orientation_pattern",
              "rack_width_m", "rack_depth_m", "aisle_width_m", "crac_units",
-             "recirculation"}
+             "recirculation", "limits"}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -67,9 +67,16 @@ def load_yaml(path: str | pathlib.Path) -> dict[str, Any]:
 
 
 def load_twin_config(path: str | pathlib.Path,
-                     recirc_override: dict[str, Any] | None = None) -> TwinConfig:
-    """Read configs/twin/*.yaml. `recirc_override` lets a hall adjust its own
-    containment without forking the whole parameter file."""
+                     recirc_override: dict[str, Any] | None = None,
+                     limits_override: dict[str, Any] | None = None) -> TwinConfig:
+    """Read configs/twin/*.yaml.
+
+    A hall may override its own `recirculation` and `limits` without forking the whole
+    parameter file. Limits are hall-specific for a physical reason: an uncontained hall
+    recirculates over a much shorter path, so it runs far hotter at the same setpoints
+    and is actually operated with colder supply air and higher fan speeds. Holding all
+    three halls to one envelope would either put hall_c permanently in violation or
+    leave hall_a with no decisions to make."""
     raw = load_yaml(path)
     unknown = set(raw) - {"recirculation", "power", "thermal", "limits"}
     if unknown:
@@ -82,11 +89,18 @@ def load_twin_config(path: str | pathlib.Path,
             raise ValueError(f"hall recirculation override: unknown key(s) {sorted(bad)}")
         recirc.update(recirc_override)
 
+    limits = dict(raw.get("limits", {}))
+    if limits_override:
+        bad = set(limits_override) - {f.name for f in dataclasses.fields(Limits)}
+        if bad:
+            raise ValueError(f"hall limits override: unknown key(s) {sorted(bad)}")
+        limits.update(limits_override)
+
     return TwinConfig(
         recirculation=_strict(RecircParams, recirc, f"{path}:recirculation"),
         power=_strict(PowerParams, dict(raw.get("power", {})), f"{path}:power"),
         thermal=_strict(ThermalParams, dict(raw.get("thermal", {})), f"{path}:thermal"),
-        limits=_strict(Limits, dict(raw.get("limits", {})), f"{path}:limits"),
+        limits=_strict(Limits, limits, f"{path}:limits"),
     )
 
 
@@ -107,7 +121,8 @@ def build(hall_path: str | pathlib.Path,
           twin_path: str | pathlib.Path) -> tuple[ThermalTwin, HallGeometry, TwinConfig]:
     """Load a hall and a parameter set and return a ready twin."""
     hall_raw = load_hall_config(hall_path)
-    cfg = load_twin_config(twin_path, hall_raw.get("recirculation"))
+    cfg = load_twin_config(twin_path, hall_raw.get("recirculation"),
+                           hall_raw.get("limits"))
     geom = build_hall(hall_raw)
     twin = ThermalTwin(geom, recirc=cfg.recirculation, power=cfg.power,
                        thermal=cfg.thermal)

@@ -1,0 +1,39 @@
+# Phase 3: the graph model.
+# Trained on hall_a only. hall_b and hall_c are evaluated zero-shot with the same
+# weights and the same normaliser -- statistics are never recomputed on the target
+# hall, because that is leakage and it inflates the transfer numbers.
+
+source_hall: hall_a
+transfer_halls: [hall_b, hall_c]
+horizons_s: [30, 60, 300]
+seeds: [0, 1, 2, 3, 4]
+lags: 6
+
+split:
+  train_frac: 0.70
+  val_frac: 0.15
+
+# One sample is a whole-hall snapshot, so 4,200 samples is 840,000 rack predictions.
+sample_stride: 10
+
+model:
+  hidden: 96
+  layers: 3
+  heads: 4
+  aggregation: attention
+  use_edge_features: true
+  dropout: 0.05
+
+train:
+  epochs: 30
+  batch_size: 16
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  patience: 6
+
+graph:
+  radius_m: 8.0
+  max_rows_crossed: 3
+  max_degree: 16
+  crac_supply_racks: 24

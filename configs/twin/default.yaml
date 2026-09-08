@@ -53,7 +53,15 @@ limits:
   # ASHRAE 2021 thermal guidelines, class A1 equipment.
   inlet_recommended_max_c: 27.0
   inlet_allowable_max_c: 32.0
+  # The hall's mean recirculation rise is about 5 K, so a supply setpoint above ~21 C
+  # puts every rack over the 27 C recommended limit at any fan speed and there is no
+  # operating decision left to make. Capping at 21 keeps the envelope one an operator
+  # would actually use, and leaves fan speed as the lever that decides whether the
+  # hall breaches. Measured envelope at 85% utilisation is in docs/data-generation.md.
   supply_temp_min_c: 16.0
-  supply_temp_max_c: 25.0
-  crac_fan_frac_min: 0.40
+  supply_temp_max_c: 21.0
+  # Below about 0.55 the hall runs past the 32 C allowable limit at high load, which
+  # is not an operating point anyone would choose. The floor bounds the sweep to
+  # settings a plant would actually use.
+  crac_fan_frac_min: 0.55
   crac_fan_frac_max: 1.0

@@ -1,0 +1,35 @@
+# Phase 2: baselines, run before the graph model.
+# The ordering is deliberate. If gradient boosting is already close to the ceiling,
+# that has to be known before six weeks go into the graph model.
+
+hall: hall_a
+horizons_s: [30, 60, 300]
+seeds: [0, 1, 2, 3, 4]
+lags: 6
+
+split:
+  train_frac: 0.70
+  val_frac: 0.15
+
+# Timesteps are 30 s apart and adjacent ones are near-identical, so training on every
+# one buys almost nothing and costs a great deal. Stride subsamples in time; the seed
+# then picks a random offset and subset, so the five seeds differ in their training
+# data as well as in model initialisation.
+sample_stride: 20
+max_train_rows: 400000
+
+lightgbm:
+  k_neighbours: [2, 4, 6]
+  n_estimators: 400
+  learning_rate: 0.05
+  num_leaves: 63
+
+lstm:
+  hidden: 64
+  layers: 2
+  epochs: 8
+  batch_size: 512
+  learning_rate: 0.002
+
+rc:
+  ridge: 0.000001

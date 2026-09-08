@@ -1,0 +1,34 @@
+# hall_c -- tests layout transfer. Same rack count as hall_a, but no containment:
+# every row faces the same way, so each aisle takes one row's inlets and the next
+# row's exhaust. CRAC returns sit at different aisles and are unevenly loaded.
+#
+# This is genuinely a different hall, not a relabelling of hall_a. With inlets sitting
+# directly across a mixed aisle from the next row's exhausts, the recirculation path
+# is roughly one aisle width instead of a full row pitch, so at identical setpoints it
+# runs about 12 K hotter at the hot spots and its inlet temperature spread is 9.7 K
+# against hall_a's 2.5 K.
+name: hall_c
+rows: 10
+racks_per_row: 20
+orientation_pattern: uniform
+
+rack_width_m: 0.6
+rack_depth_m: 1.2
+aisle_width_m: 1.2
+
+# Uneven duty: the middle unit carries more of the load than the two end units.
+crac_units:
+  - {aisle: 0, end: left,  flow_share: 1.0}
+  - {aisle: 4, end: right, flow_share: 1.6}
+  - {aisle: 8, end: left,  flow_share: 1.0}
+
+# Operators of uncontained halls run colder supply air and keep the fans up, because
+# they have to. Held to hall_a's envelope this hall would sit permanently in violation
+# and the dataset would carry no usable compliant states. Measured at 85% utilisation,
+# this envelope spans 22.8 C (compliant) to 34.5 C (breaching) without ever reaching
+# the runaway guard. See docs/data-generation.md.
+limits:
+  supply_temp_min_c: 13.0
+  supply_temp_max_c: 18.0
+  crac_fan_frac_min: 0.60
+  crac_fan_frac_max: 1.0
