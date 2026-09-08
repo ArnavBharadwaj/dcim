@@ -114,7 +114,9 @@ class ThermalGNN(nn.Module):
 
         for block in self.blocks:
             h = self.dropout(block(h, ei, ea))
-        return self.decoder(h).reshape(b, v)[:, :r]
+        # Slicing off the CRAC nodes leaves a non-contiguous view, and the loss
+        # functions take an internal view of their inputs.
+        return self.decoder(h).reshape(b, v)[:, :r].contiguous()
 
     @property
     def n_parameters(self) -> int:

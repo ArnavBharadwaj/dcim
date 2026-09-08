@@ -92,8 +92,15 @@ class RCNetwork:
             scale[0] = 1.0
             scale = np.where(scale < 1e-9, 1.0, scale)
             Xs = X / scale
-            gram = Xs.T @ Xs + self.ridge * np.eye(Xs.shape[1])
-            beta = np.linalg.lstsq(gram, Xs.T @ target_delta[:, rack], rcond=None)[0]
+            # Normalise the gram by the sample count so `ridge` is scale-free and does
+            # not have to be retuned when the training subsample changes. It has real
+            # work to do here: neighbouring racks' inlet temperatures correlate at
+            # 0.995, so the design is severely collinear and an under-regularised fit
+            # swings wildly between seeds -- it was reporting 0.168 +/- 0.139 K.
+            n = Xs.shape[0]
+            gram = Xs.T @ Xs / n + self.ridge * np.eye(Xs.shape[1])
+            beta = np.linalg.lstsq(gram, Xs.T @ target_delta[:, rack] / n,
+                                   rcond=None)[0]
             self.coef_.append(beta / scale)
             self._scale.append(scale)
         return self

@@ -13,11 +13,17 @@ split:
   train_frac: 0.70
   val_frac: 0.15
 
-# One sample is a whole-hall snapshot, so 4,200 samples is 840,000 rack predictions.
-sample_stride: 10
+# One sample is a whole-hall snapshot, so 2,100 samples is 420,000 rack predictions --
+# deliberately matched to the 400,000-row budget the LightGBM baseline gets, so the
+# comparison is about the model rather than about how much data each one saw.
+sample_stride: 20
 
 model:
-  hidden: 96
+  # 64 rather than a larger width: message passing over a 200-rack hall costs about
+  # 16 ms per sample on this machine either on MPS or on CPU, and the full sweep is
+  # 3 horizons x 5 seeds. Early stopping on validation loss decides the real capacity
+  # used; the smoke test reached LightGBM-level accuracy in 2 epochs.
+  hidden: 64
   layers: 3
   heads: 4
   aggregation: attention
@@ -25,12 +31,12 @@ model:
   dropout: 0.05
 
 train:
-  epochs: 30
+  epochs: 20
   batch_size: 16
   learning_rate: 0.001
   weight_decay: 0.0001
   grad_clip: 1.0
-  patience: 6
+  patience: 5
 
 graph:
   radius_m: 8.0

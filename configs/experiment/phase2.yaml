@@ -32,4 +32,7 @@ lstm:
   learning_rate: 0.002
 
 rc:
-  ridge: 0.000001
+  # Applied to a sample-count-normalised gram, so it is scale-free. Neighbouring racks
+  # correlate at 0.995 and the design is severely collinear; at 1e-6 the per-rack fits
+  # swung between seeds by more than their own mean.
+  ridge: 0.001
