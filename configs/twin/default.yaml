@@ -1,0 +1,59 @@
+# Twin parameters. Provenance for every value is in docs/thermal-model-design.md.
+# Halls may override anything under `recirculation`; see configs/hall/*.yaml.
+
+recirculation:
+  # Recirculation decays with distance from the exhaust face to the target inlet.
+  decay_length_m: 2.5
+  # Extra attenuation per rack row the air must cross beyond the first. Weakly
+  # identified in contained layouts, where distance already dominates; it matters
+  # for uncontained ones, where a single aisle serves both inlets and exhausts.
+  row_attenuation: 0.35
+  # Exhaust is carried toward the CRAC return and leaks along the way, so racks
+  # downstream of a source receive more of its air than racks upstream. This is
+  # what makes the induced graph directed.
+  weight_downstream: 1.0
+  weight_upstream: 0.25
+  # Hall-average fraction of rack exhaust that recirculates rather than returning
+  # to a CRAC. Sets how much heat recirculates; geometry decides where it lands.
+  escape_base: 0.30
+  escape_max: 0.55
+  # Racks far from a return leak more; normalised so the hall mean multiplier is 1.
+  crac_distance_gain: 0.45
+  # When rack fans move more air than the CRACs supply, the deficit can only be
+  # made up by ingesting recirculated air. This is the mechanism that puts CRAC
+  # fan speed in control of the coupling structure rather than just its offset.
+  underprovision_gain: 1.20
+
+power:
+  # A GPU-dense rack: 8 accelerated nodes at 4 kW, about 32 kW at full load.
+  servers_per_rack: 8
+  server_full_load_w: 4000.0
+  server_idle_w: 800.0
+  # Fraction of full-load power added per kelvin of inlet temperature. SustainDC
+  # ships about 0.0517 here, an order of magnitude above measured server
+  # behaviour; we do not adopt it. See docs/thermal-model-design.md.
+  cpu_temp_coeff_per_k: 0.004
+  reference_temp_c: 20.0
+  fan_ref_power_w: 250.0
+  fan_min_ratio: 0.30
+  fan_temp_gain_per_k: 0.030
+  design_delta_t_k: 12.0
+
+thermal:
+  # Rack-air thermal time constant. At 30 s resolution this makes a 30 s horizon
+  # transient and a 300 s horizon close to steady-state, so the horizon sweep
+  # measures three different things.
+  time_constant_s: 60.0
+  # CRAC flow as a multiple of rack airflow demand at full load, fans at 100%.
+  design_provisioning: 1.15
+  runaway_threshold_c: 60.0
+
+# Operating envelope, used by data generation and the controllers.
+limits:
+  # ASHRAE 2021 thermal guidelines, class A1 equipment.
+  inlet_recommended_max_c: 27.0
+  inlet_allowable_max_c: 32.0
+  supply_temp_min_c: 16.0
+  supply_temp_max_c: 25.0
+  crac_fan_frac_min: 0.40
+  crac_fan_frac_max: 1.0
