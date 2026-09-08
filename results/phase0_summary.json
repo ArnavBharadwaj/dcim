@@ -1,0 +1,48 @@
+{
+  "config": "dc_config.json",
+  "racks_simulated": 20,
+  "baseline_load_pct": 50.0,
+  "perturbed_load_pct": 100.0,
+  "crac_setpoint_C": 20.0,
+  "mean_source_delta_power_W": 14786.500000000011,
+  "max_abs_delta_inlet_self_K": 0.0,
+  "max_abs_delta_inlet_cross_K": 0.0,
+  "max_abs_delta_outlet_self_K": 4.592707267078673,
+  "max_abs_delta_outlet_cross_K": 0.0,
+  "d_inlet_d_setpoint_min": 1.0,
+  "d_inlet_d_setpoint_max": 1.0,
+  "avg_crac_return_temp_baseline_C": 32.29549793525156,
+  "avg_crac_return_temp_perturbed_C": 32.467469727200445,
+  "own_load_sweep_rack0": [
+    {
+      "load_pct": 0.0,
+      "inlet_C": 25.3,
+      "outlet_C": 29.97861056707095,
+      "power_W": 39852.16666666665
+    },
+    {
+      "load_pct": 25.0,
+      "inlet_C": 25.3,
+      "outlet_C": 32.135841868388134,
+      "power_W": 46824.666666666664
+    },
+    {
+      "load_pct": 50.0,
+      "inlet_C": 25.3,
+      "outlet_C": 34.09383028467341,
+      "power_W": 53797.16666666665
+    },
+    {
+      "load_pct": 75.0,
+      "inlet_C": 25.3,
+      "outlet_C": 35.884553335814154,
+      "power_W": 60769.66666666666
+    },
+    {
+      "load_pct": 100.0,
+      "inlet_C": 25.3,
+      "outlet_C": 37.53326612365111,
+      "power_W": 67742.16666666667
+    }
+  ]
+}
