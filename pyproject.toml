@@ -15,6 +15,7 @@ dependencies = [
     "torch-geometric>=2.6",
     "lightgbm>=4.3",
     "scikit-learn>=1.4",
+    "reportlab>=5.0.1",
 ]
 
 [project.optional-dependencies]
