@@ -1,0 +1,34 @@
+# hall_l1 -- the liquid-cooled training hall. 128 racks of direct-to-chip AI compute,
+# roughly 77 kW each, four CDUs each serving two branch manifolds.
+#
+# The point of this hall is that its thermal coupling follows the coolant topology, not
+# the floor plan. Rows 0 and 1 share a CDU; rows 1 and 2 stand next to each other and
+# share nothing. A model that picks neighbours by distance picks the wrong ones.
+name: hall_l1
+rows: 8
+racks_per_row: 16
+orientation_pattern: paired
+
+rack_width_m: 0.6
+rack_depth_m: 1.2
+aisle_width_m: 1.2
+
+cooling: liquid
+
+# Residual air, roughly a fifth of the load, still returns to CRAHs on a chilled loop.
+crac_units:
+  - {aisle: 1, end: left}
+  - {aisle: 5, end: right}
+
+# Each CDU feeds two branch manifolds, one per rack row. Alternating the feed end means
+# a rack's position along its manifold is not a simple function of its column.
+cdu_units:
+  - {capacity_kw: 2500, branches: [{row: 0, feed: left},  {row: 1, feed: left}]}
+  - {capacity_kw: 2500, branches: [{row: 2, feed: right}, {row: 3, feed: right}]}
+  - {capacity_kw: 2500, branches: [{row: 4, feed: left},  {row: 5, feed: left}]}
+  - {capacity_kw: 2500, branches: [{row: 6, feed: right}, {row: 7, feed: right}]}
+
+# New AI halls are built with proper containment, and only a fifth of the heat is
+# airborne anyway, so less of it recirculates than in the air-cooled halls.
+recirculation:
+  escape_base: 0.22

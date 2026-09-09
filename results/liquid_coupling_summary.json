@@ -1,0 +1,19 @@
+{
+  "hall": "hall_l1",
+  "racks": 128,
+  "cdus": 4,
+  "branches": 8,
+  "mean_abs_dT_same_branch_K": 0.018169271467015205,
+  "mean_abs_dT_same_cdu_other_branch_K": 0.009600000000006048,
+  "mean_abs_dT_other_cdu_K": 0.0,
+  "near_same_cdu_K": 0.017530637168634063,
+  "near_different_cdu_K": 0.0,
+  "near_ratio": Infinity,
+  "corr_abs_dT_with_euclidean_distance": -0.4477576776038807,
+  "variance_explained_by_topology": 0.6451437586639301,
+  "operating_point": {
+    "util_pct": 85.0,
+    "facility_water_c": 34.0,
+    "pump_frac": 0.85
+  }
+}

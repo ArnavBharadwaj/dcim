@@ -1,0 +1,69 @@
+# Twin parameters for a direct-to-chip liquid-cooled AI hall.
+# Provenance for each value is in docs/liquid-cooling-model.md.
+
+liquid:
+  # Cold plates cover the accelerators and CPUs but not the PSUs, DIMMs, drives or
+  # switching, so roughly a fifth of rack power still leaves as air.
+  liquid_fraction: 0.80
+  design_rack_flow_lpm: 90.0
+  design_delta_t_k: 12.0
+  manifold_gain_k_per_m: 0.014
+  flow_droop_per_m: 0.006
+  # Supply-return manifold cross-talk. Without it, perturbing any rack moves every
+  # rack on its loop identically and the whole structure collapses to one categorical
+  # feature. See docs/liquid-cooling-model.md.
+  manifold_crosstalk: 0.16
+  cdu_approach_min_k: 2.0
+  cdu_approach_gain: 3.0
+  cdu_capacity_kw: 2500.0
+  # Case-to-coolant rise at full rack load and design flow. Per device, not per rack:
+  # every accelerator has its own cold plate fed in parallel.
+  case_rise_full_load_k: 26.0
+  design_rack_liquid_kw: 65.0
+  # A cold plate's convective coefficient falls with flow, so slowing the pumps raises
+  # chip temperature even when the coolant supply has not moved. This is what makes
+  # pump speed a control lever rather than just a pumping-energy cost.
+  case_flow_exponent: 0.40
+
+power:
+  # A GB200-class rack: 8 accelerated nodes at 9.5 kW, about 77 kW at full load. Server
+  # fans are far smaller than an air-cooled rack's because they move only the residual
+  # fifth of the heat.
+  servers_per_rack: 8
+  server_full_load_w: 9500.0
+  server_idle_w: 1900.0
+  cpu_temp_coeff_per_k: 0.004
+  reference_temp_c: 20.0
+  fan_ref_power_w: 120.0
+  fan_min_ratio: 0.30
+  fan_temp_gain_per_k: 0.030
+  design_delta_t_k: 12.0
+
+recirculation:
+  decay_length_m: 2.5
+  row_attenuation: 0.35
+  weight_downstream: 1.0
+  weight_upstream: 0.25
+  escape_base: 0.22
+  escape_max: 0.55
+  crac_distance_gain: 0.45
+  underprovision_gain: 1.20
+
+thermal:
+  time_constant_s: 60.0
+  design_provisioning: 1.15
+  runaway_threshold_c: 90.0
+
+limits:
+  case_temp_max_c: 85.0
+  case_temp_warn_c: 78.0
+  coolant_return_max_c: 65.0
+  air_inlet_max_c: 27.0
+  # ASHRAE liquid classes W32 through W45. The top of the band is where a hall with no
+  # mechanical chilling runs, and it is where the case-temperature limit actually binds.
+  facility_water_min_c: 26.0
+  facility_water_max_c: 42.0
+  air_supply_min_c: 18.0
+  air_supply_max_c: 26.0
+  pump_frac_min: 0.55
+  pump_frac_max: 1.0

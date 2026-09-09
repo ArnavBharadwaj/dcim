@@ -16,13 +16,15 @@ from typing import Any
 import yaml
 
 from .geometry import HallGeometry, build_hall
+from .liquid import LiquidParams, LoopTopology, build_topology
+from .liquid_thermal import LiquidCooledTwin, LiquidLimits
 from .power import PowerParams
 from .recirculation import RecircParams
 from .thermal import ThermalParams, ThermalTwin
 
 HALL_KEYS = {"name", "rows", "racks_per_row", "orientation_pattern",
              "rack_width_m", "rack_depth_m", "aisle_width_m", "crac_units",
-             "recirculation", "limits"}
+             "recirculation", "limits", "cooling", "cdu_units"}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -127,3 +129,69 @@ def build(hall_path: str | pathlib.Path,
     twin = ThermalTwin(geom, recirc=cfg.recirculation, power=cfg.power,
                        thermal=cfg.thermal)
     return twin, geom, cfg
+
+
+# ---------------------------------------------------------------------------
+# Liquid-cooled halls
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass(frozen=True)
+class LiquidTwinConfig:
+    liquid: LiquidParams
+    recirculation: RecircParams
+    power: PowerParams
+    thermal: ThermalParams
+    limits: LiquidLimits
+
+
+def load_liquid_config(path: str | pathlib.Path,
+                       recirc_override: dict[str, Any] | None = None,
+                       limits_override: dict[str, Any] | None = None
+                       ) -> LiquidTwinConfig:
+    """Read configs/twin/liquid.yaml, with the same hall-override rules as the air twin."""
+    raw = load_yaml(path)
+    unknown = set(raw) - {"liquid", "recirculation", "power", "thermal", "limits"}
+    if unknown:
+        raise ValueError(f"{path}: unknown top-level key(s) {sorted(unknown)}")
+
+    recirc = dict(raw.get("recirculation", {}))
+    if recirc_override:
+        bad = set(recirc_override) - {f.name for f in dataclasses.fields(RecircParams)}
+        if bad:
+            raise ValueError(f"hall recirculation override: unknown key(s) {sorted(bad)}")
+        recirc.update(recirc_override)
+
+    limits = dict(raw.get("limits", {}))
+    if limits_override:
+        bad = set(limits_override) - {f.name for f in dataclasses.fields(LiquidLimits)}
+        if bad:
+            raise ValueError(f"hall limits override: unknown key(s) {sorted(bad)}")
+        limits.update(limits_override)
+
+    return LiquidTwinConfig(
+        liquid=_strict(LiquidParams, dict(raw.get("liquid", {})), f"{path}:liquid"),
+        recirculation=_strict(RecircParams, recirc, f"{path}:recirculation"),
+        power=_strict(PowerParams, dict(raw.get("power", {})), f"{path}:power"),
+        thermal=_strict(ThermalParams, dict(raw.get("thermal", {})), f"{path}:thermal"),
+        limits=_strict(LiquidLimits, limits, f"{path}:limits"),
+    )
+
+
+def build_liquid(hall_path: str | pathlib.Path, twin_path: str | pathlib.Path
+                 ) -> tuple[LiquidCooledTwin, HallGeometry, LoopTopology,
+                            LiquidTwinConfig]:
+    """Load a liquid-cooled hall and return a ready twin plus its coolant topology."""
+    hall_raw = load_hall_config(hall_path)
+    if str(hall_raw.get("cooling", "air")) != "liquid":
+        raise ValueError(f"{hall_path}: build_liquid needs cooling: liquid; "
+                         "use build() for an air-cooled hall")
+    if "cdu_units" not in hall_raw:
+        raise ValueError(f"{hall_path}: a liquid-cooled hall must define cdu_units")
+
+    cfg = load_liquid_config(twin_path, hall_raw.get("recirculation"),
+                             hall_raw.get("limits"))
+    geom = build_hall(hall_raw)
+    topo = build_topology(geom, hall_raw["cdu_units"], cfg.liquid.cdu_capacity_kw)
+    twin = LiquidCooledTwin(geom, topo, liquid=cfg.liquid, recirc=cfg.recirculation,
+                            power=cfg.power, thermal=cfg.thermal, limits=cfg.limits)
+    return twin, geom, topo, cfg

@@ -204,3 +204,130 @@ def shuffle_edges(graph: HallGraph, frac: float, seed: int) -> HallGraph:
         chosen = rng.choice(cand, size=n_shuf, replace=False)
         ei[1, chosen] = rng.integers(0, graph.n_racks, size=n_shuf)
     return dataclasses.replace(graph, edge_index=ei)
+
+
+# ---------------------------------------------------------------------------
+# Liquid cooling
+# ---------------------------------------------------------------------------
+
+class LiquidNodeType(enum.IntEnum):
+    RACK = 0
+    CDU = 1
+    CRAC = 2
+
+
+class LiquidEdgeType(enum.IntEnum):
+    MANIFOLD_DOWNSTREAM = 0   # coolant path along a shared branch manifold
+    MANIFOLD_UPSTREAM = 1     # the reverse, which is hydraulically not the same thing
+    RACK_TO_CDU = 2           # coolant return
+    CDU_TO_RACK = 3           # coolant supply
+    AIR_RECIRC = 4            # residual air, the share the cold plates did not take
+
+
+LIQUID_EDGE_FEATURE_NAMES = (
+    "distance_m",
+    "manifold_offset_m",       # signed position difference along the branch
+    "same_branch",
+    "same_cdu",
+    "is_manifold_downstream",
+    "is_manifold_upstream",
+    "is_rack_to_cdu",
+    "is_cdu_to_rack",
+    "is_air_recirc",
+)
+
+
+def build_liquid_graph(geom: HallGeometry, topo, spec: GraphSpec | None = None,
+                       air_radius_m: float = 6.0,
+                       air_max_degree: int = 8) -> HallGraph:
+    """Wire a liquid-cooled hall: coolant topology first, residual air second.
+
+    The coolant edges are the point. In a direct-to-chip hall the racks that share a
+    branch manifold share a supply temperature, a flow budget and a CDU; racks on a
+    different branch share almost nothing however close they stand. So the edges follow
+    the hydraulics, not the floor plan, and two racks side by side in adjacent rows may
+    have no coolant edge between them at all.
+
+    That is precisely the structure a Euclidean k-nearest-neighbour feature set cannot
+    represent: its neighbours are chosen by distance, which here is close to
+    uninformative about coupling. `scripts/liquid_probe.py` measures how far apart the
+    two orderings actually are.
+
+    Residual air edges are still included, with a shorter radius and lower degree than
+    the air-cooled hall uses, because only about a fifth of the heat leaves by air.
+    """
+    spec = spec or GraphSpec()
+    n = geom.n_racks
+    m = int(topo.n_cdus)
+    rack_nodes = np.arange(n)
+    cdu_nodes = np.arange(n, n + m)
+    node_type = np.concatenate([
+        np.full(n, int(LiquidNodeType.RACK)),
+        np.full(m, int(LiquidNodeType.CDU))]).astype(np.int64)
+
+    def feat(dist, offset, same_branch, same_cdu, etype):
+        return [
+            dist, offset,
+            1.0 if same_branch else 0.0,
+            1.0 if same_cdu else 0.0,
+            1.0 if etype == LiquidEdgeType.MANIFOLD_DOWNSTREAM else 0.0,
+            1.0 if etype == LiquidEdgeType.MANIFOLD_UPSTREAM else 0.0,
+            1.0 if etype == LiquidEdgeType.RACK_TO_CDU else 0.0,
+            1.0 if etype == LiquidEdgeType.CDU_TO_RACK else 0.0,
+            1.0 if etype == LiquidEdgeType.AIR_RECIRC else 0.0,
+        ]
+
+    src, dst, attr = [], [], []
+    centre = geom.centre
+    dist_xy = np.linalg.norm(centre[:, None, :] - centre[None, :, :], axis=2)
+
+    # --- coolant: every ordered pair on a shared branch, both directions -------
+    # Direction matters hydraulically: a rack nearer the feed sees coolant that has not
+    # yet passed its downstream neighbours, so the two directions carry different
+    # features and the ablation on edge direction is a real question here.
+    for b in range(int(topo.n_branches)):
+        members = topo.racks_on_branch(b)
+        for a_i in members:
+            for b_j in members:
+                if a_i == b_j:
+                    continue
+                offset = float(topo.manifold_dist_m[b_j] - topo.manifold_dist_m[a_i])
+                etype = (LiquidEdgeType.MANIFOLD_DOWNSTREAM if offset > 0
+                         else LiquidEdgeType.MANIFOLD_UPSTREAM)
+                src.append(int(a_i)); dst.append(int(b_j))
+                attr.append(feat(float(dist_xy[a_i, b_j]), offset, True, True, etype))
+
+    # --- coolant: return to and supply from the serving CDU ---------------------
+    for i in range(n):
+        c = int(topo.cdu_of_rack[i])
+        d = float(topo.manifold_dist_m[i])
+        src.append(i); dst.append(int(cdu_nodes[c]))
+        attr.append(feat(d, d, False, True, LiquidEdgeType.RACK_TO_CDU))
+        src.append(int(cdu_nodes[c])); dst.append(i)
+        attr.append(feat(d, -d, False, True, LiquidEdgeType.CDU_TO_RACK))
+
+    # --- residual air recirculation --------------------------------------------
+    exhaust, inlet = geom.exhaust_xy, geom.inlet_xy
+    air_d = np.linalg.norm(inlet[None, :, :] - exhaust[:, None, :], axis=2)
+    crossed = rows_crossed(geom)
+    eligible = (air_d <= air_radius_m) & (crossed <= spec.max_rows_crossed)
+    np.fill_diagonal(eligible, False)
+    for j in range(n):
+        cand = np.flatnonzero(eligible[:, j])
+        if cand.size > air_max_degree:
+            cand = cand[np.argsort(air_d[cand, j])[:air_max_degree]]
+        for i in cand:
+            src.append(int(i)); dst.append(j)
+            attr.append(feat(float(air_d[i, j]), 0.0,
+                             bool(topo.branch_of_rack[i] == topo.branch_of_rack[j]),
+                             bool(topo.cdu_of_rack[i] == topo.cdu_of_rack[j]),
+                             LiquidEdgeType.AIR_RECIRC))
+
+    if not src:
+        raise ValueError("liquid graph has no edges; check the CDU topology")
+
+    return HallGraph(
+        edge_index=np.stack([np.asarray(src), np.asarray(dst)]).astype(np.int64),
+        edge_attr=np.asarray(attr, dtype=np.float32),
+        node_type=node_type, n_racks=n, n_cracs=m,
+        rack_nodes=rack_nodes, crac_nodes=cdu_nodes)
