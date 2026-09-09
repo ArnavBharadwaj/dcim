@@ -27,7 +27,8 @@ import numpy as np
 
 from .geometry import HallGeometry
 from .power import C_AIR, RHO_AIR, PowerParams, crac_supply_flow_m3s, rack_power
-from .recirculation import RecircParams, build_D, geometric_kernel
+from .recirculation import (RecircParams, build_D, competition_weights,
+                            geometric_kernel, local_provisioning)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -82,14 +83,27 @@ class ThermalTwin:
         self.recirc = recirc or RecircParams()
         self.power = power or PowerParams()
         self.thermal = thermal or ThermalParams()
-        self._kernel = geometric_kernel(self.geom, self.recirc)
+        # The kernel's shape now depends on supply flow, so it cannot be built once.
+        # Cached by rounded flow ratio: the shape varies smoothly and a 1% grid is far
+        # finer than the control resolution, so this costs one dense build per distinct
+        # fan setting rather than one per timestep.
+        self._competition = competition_weights(self.geom, self.recirc)
+        self._kernel_cache: dict[int, np.ndarray] = {}
         self._inlet: np.ndarray | None = None
         self._time_s = 0.0
 
+    def _kernel_for(self, flow_ratio: float) -> np.ndarray:
+        key = int(round(float(flow_ratio) * 100))
+        k = self._kernel_cache.get(key)
+        if k is None:
+            k = geometric_kernel(self.geom, self.recirc, flow_ratio=key / 100.0)
+            self._kernel_cache[key] = k
+        return k
+
     # ---------------------------------------------------------------- helpers
 
-    def _provisioning(self, fan_frac: float, airflow: np.ndarray,
-                      crac_flow_scale: np.ndarray | None) -> float:
+    def _supply_flow(self, fan_frac: float,
+                     crac_flow_scale: np.ndarray | None) -> float:
         supply = crac_supply_flow_m3s(self.geom.n_racks, self.power,
                                       self.thermal.design_provisioning, fan_frac)
         if crac_flow_scale is not None:
@@ -97,10 +111,24 @@ class ThermalTwin:
             # CRAC removes its share; Phase 4's drift injection uses this.
             share = self.geom.crac_flow_share
             supply *= float(np.dot(share, np.asarray(crac_flow_scale, dtype=float)))
-        demand = float(airflow.sum())
+        return supply
+
+    def _provisioning(self, fan_frac: float, airflow: np.ndarray,
+                      crac_flow_scale: np.ndarray | None) -> np.ndarray:
+        """Per-rack provisioning ratio.
+
+        Was a single hall-wide scalar. Validation against the NYCU telemetry showed
+        that a scalar cannot reproduce the measured spatial statistics at any parameter
+        setting: with one global ratio every rack's leakage moves together, so the
+        temperature field scales rather than reorganises and pairwise correlation sits
+        near 0.93 against a measured 0.59. Racks actually compete for the same tiles,
+        so a rack whose neighbours ramp their fans loses provisioning itself.
+        """
+        supply = self._supply_flow(fan_frac, crac_flow_scale)
+        demand = float(np.asarray(airflow).sum())
         if demand <= 0:
             raise ValueError("total rack airflow is zero")
-        return supply / demand
+        return local_provisioning(self._competition, airflow, supply)
 
     def _crac_return_temp(self, outlet: np.ndarray, k: np.ndarray,
                           escape: np.ndarray) -> float:
@@ -135,7 +163,8 @@ class ThermalTwin:
             state = rack_power(util, temp, self.power)
             phi = self._provisioning(crac_fan_frac, state.airflow_m3s, crac_flow_scale)
             D, _ = build_D(self.geom, self.recirc, state.k_w_per_k, phi,
-                           kernel=self._kernel, escape_scale=escape_scale)
+                           kernel=self._kernel_for(crac_fan_frac),
+                           escape_scale=escape_scale)
             target = supply_temp_c + D @ state.total_power_w
             new = temp + damping * (target - temp)
             if np.max(np.abs(new - temp)) < tol:
@@ -193,7 +222,8 @@ class ThermalTwin:
         rs = rack_power(util, inlet, self.power)
         phi = self._provisioning(crac_fan_frac, rs.airflow_m3s, crac_flow_scale)
         D, A = build_D(self.geom, self.recirc, rs.k_w_per_k, phi,
-                       kernel=self._kernel, escape_scale=escape_scale)
+                       kernel=self._kernel_for(crac_fan_frac),
+                       escape_scale=escape_scale)
         target = supply_temp_c + D @ rs.total_power_w
         outlet = inlet + rs.total_power_w / rs.k_w_per_k
         escape = A.sum(axis=1)
@@ -209,7 +239,7 @@ class ThermalTwin:
             airflow_m3s=rs.airflow_m3s,
             supply_temp_c=float(supply_temp_c),
             crac_fan_frac=float(crac_fan_frac),
-            provisioning_ratio=phi,
+            provisioning_ratio=float(np.mean(phi)),
             crac_return_temp_c=self._crac_return_temp(outlet, rs.k_w_per_k, escape),
             runaway=bool(np.max(inlet) > self.thermal.runaway_threshold_c),
         )
@@ -220,7 +250,8 @@ class ThermalTwin:
         rs = rack_power(np.asarray(util_pct, dtype=float),
                         np.asarray(inlet_temp_c, dtype=float), self.power)
         phi = self._provisioning(crac_fan_frac, rs.airflow_m3s, None)
-        D, _ = build_D(self.geom, self.recirc, rs.k_w_per_k, phi, kernel=self._kernel)
+        D, _ = build_D(self.geom, self.recirc, rs.k_w_per_k, phi,
+                       kernel=self._kernel_for(crac_fan_frac))
         return D
 
 

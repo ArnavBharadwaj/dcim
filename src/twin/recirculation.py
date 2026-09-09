@@ -69,6 +69,27 @@ class RecircParams:
     crac_distance_gain: float = 0.45     # extra leakage for racks far from a return
     underprovision_gain: float = 1.20    # extra leakage when rack fans outpace the CRACs
 
+    # --- flow redistribution -------------------------------------------------
+    # Added after validating against real measurements. Without these two terms the
+    # model produces a pairwise rack-rack temperature correlation of 0.93 with zero
+    # anti-correlated pairs, against 0.59 and 7.7% in the NYCU 135-sensor telemetry,
+    # and no setting of the parameters above closes the gap. See
+    # scripts/validate_against_real.py and docs/flow-redistribution.md.
+
+    # Racks draw from a shared plenum, so a rack's cold-air supply depends on what its
+    # neighbours are drawing, not only on the hall total. This is the length scale over
+    # which racks compete for the same tiles.
+    competition_length_m: float = 2.5
+    # How strongly the recirculation path shortens as supply flow rises. The ThermoFOAM
+    # CFD shows the spatial pattern *reorganising* between supply velocities rather than
+    # merely scaling: at 0.75 m/s the largest response to an overloaded rack is at a
+    # different rack, and at 1.00 m/s one rack cools. A kernel whose shape is fixed by
+    # geometry cannot reproduce that, however its magnitude is tuned.
+    decay_flow_exponent: float = 0.6
+    # Directional asymmetry sharpens with flow: a faster jet is swept further before it
+    # spreads, so upstream leakage falls away.
+    asymmetry_flow_gain: float = 0.6
+
     def __post_init__(self) -> None:
         if not 0.0 < self.escape_base < 1.0:
             raise ValueError("escape_base must lie in (0, 1)")
@@ -81,20 +102,35 @@ class RecircParams:
             raise ValueError("decay_length_m must be positive")
         if not 0.0 <= self.row_attenuation <= 1.0:
             raise ValueError("row_attenuation must lie in [0, 1]")
+        if self.competition_length_m <= 0:
+            raise ValueError("competition_length_m must be positive")
+        if self.decay_flow_exponent < 0:
+            raise ValueError("decay_flow_exponent must be non-negative")
 
 
-def geometric_kernel(geom: HallGeometry, params: RecircParams) -> np.ndarray:
-    """(N, N) unnormalised recirculation weights. Depends only on geometry.
+def geometric_kernel(geom: HallGeometry, params: RecircParams,
+                     flow_ratio: float = 1.0) -> np.ndarray:
+    """(N, N) unnormalised recirculation weights.
 
     Entry (i, j) is the relative propensity for rack i's exhaust to reach rack j's
-    inlet, before any leakage budget is applied. Computed once per hall and reused
-    at every timestep; only the leakage scaling is state-dependent.
+    inlet, before any leakage budget is applied.
+
+    `flow_ratio` is the hall's supply flow relative to its design value, and it changes
+    the *shape* of the kernel, not just its magnitude. A faster supply jet is carried
+    further before it spreads, so the recirculation path shortens and the upstream
+    limb of the asymmetry falls away. This is why the kernel can no longer be computed
+    once per hall: the CFD shows the spatial pattern reorganising between supply
+    velocities, and a shape fixed by geometry alone reproduces a correlation structure
+    nothing like the measured one.
     """
     delta = geom.inlet_xy[None, :, :] - geom.exhaust_xy[:, None, :]   # (N, N, 2)
     dist = np.linalg.norm(delta, axis=2)
 
+    fr = max(float(flow_ratio), 1e-3)
+    decay = params.decay_length_m * fr ** (-params.decay_flow_exponent)
+
     # Distance decay along the recirculation path.
-    weight = np.exp(-dist / params.decay_length_m)
+    weight = np.exp(-dist / decay)
 
     # Crossing a row of racks costs a further factor. rows_crossed == 1 is the
     # over-the-top short circuit into an adjacent aisle and is left unattenuated.
@@ -107,14 +143,58 @@ def geometric_kernel(geom: HallGeometry, params: RecircParams) -> np.ndarray:
     norm = np.linalg.norm(delta, axis=2, keepdims=True)
     unit = np.divide(delta, norm, out=np.zeros_like(delta), where=norm > 0)
     proj = np.einsum("ijk,ik->ij", unit, geom.return_dir)   # cos angle to return path
-    w_up, w_dn = params.weight_upstream, params.weight_downstream
+    # Upstream leakage is suppressed as the supply jet speeds up.
+    w_up = params.weight_upstream * fr ** (-params.asymmetry_flow_gain)
+    w_dn = params.weight_downstream
     weight = weight * (w_up + (w_dn - w_up) * (proj + 1.0) / 2.0)
 
     return weight
 
 
+def competition_weights(geom: HallGeometry, params: RecircParams) -> np.ndarray:
+    """(N, N) how strongly two racks draw on the same cold air.
+
+    Racks facing a common cold aisle pull from the same perforated tiles, so what one
+    rack can take depends on what its neighbours are taking. Weights decay with the
+    distance between inlet faces and are zero across different cold aisles, which is
+    where the shared plenum ends for practical purposes.
+
+    Geometry only, so this is computed once per hall.
+    """
+    d = np.linalg.norm(geom.inlet_xy[:, None, :] - geom.inlet_xy[None, :, :], axis=2)
+    w = np.exp(-d / params.competition_length_m)
+    same_aisle = geom.inlet_aisle[:, None] == geom.inlet_aisle[None, :]
+    return w * same_aisle
+
+
+def local_provisioning(competition: np.ndarray, airflow: np.ndarray,
+                       supply_total: float) -> np.ndarray:
+    """(N,) per-rack ratio of available cold air to competing demand.
+
+    Replaces the single hall-wide provisioning ratio. Cold air is shared out in
+    proportion to how much of the competition neighbourhood each rack represents, and
+    demand is the neighbourhood's total draw. A rack whose neighbours ramp their fans
+    therefore sees its own provisioning fall even though nothing about it changed --
+    which is the coupling path the previous model was missing, and the reason its
+    response to a perturbation always peaked at the perturbed rack.
+    """
+    if supply_total <= 0:
+        raise ValueError("supply_total must be positive")
+    n = competition.shape[0]
+    # Cold air is delivered uniformly across the floor, so a neighbourhood receives
+    # (supply_total / n) per rack in it. Weighting supply and demand by the same
+    # neighbourhood makes the ratio reduce exactly to the hall-wide provisioning ratio
+    # when every rack draws the same, which is the sanity check in the tests.
+    reach = competition.sum(axis=1)
+    supply_i = (supply_total / n) * reach
+    demand_i = competition @ np.asarray(airflow, dtype=float)
+    if np.any(demand_i <= 0):
+        raise ValueError("a rack has zero competing airflow demand")
+    return supply_i / demand_i
+
+
 def escape_fractions(geom: HallGeometry, params: RecircParams,
-                     provisioning_ratio: float,
+                     provisioning_ratio,
                      scale: np.ndarray | None = None) -> np.ndarray:
     """(N,) fraction of each rack's exhaust that recirculates instead of returning.
 
@@ -136,7 +216,9 @@ def escape_fractions(geom: HallGeometry, params: RecircParams,
         prox = 1.0 + params.crac_distance_gain * (dist - mean_dist) / mean_dist
     prox = np.maximum(prox, 0.0)
 
-    deficit = max(0.0, 1.0 - float(provisioning_ratio))
+    # Accepts a scalar (hall-wide, the old behaviour) or a per-rack array from
+    # `local_provisioning`.
+    deficit = np.maximum(0.0, 1.0 - np.asarray(provisioning_ratio, dtype=float))
     escape = params.escape_base * prox * (1.0 + params.underprovision_gain * deficit)
     if scale is not None:
         # Drift hook: a pulled blanking panel or a failed containment door raises
@@ -226,13 +308,13 @@ def hop_decomposition(A: np.ndarray, k: np.ndarray, max_order: int = 8) -> list[
 
 
 def build_D(geom: HallGeometry, params: RecircParams, k: np.ndarray,
-            provisioning_ratio: float,
+            provisioning_ratio,
             kernel: np.ndarray | None = None,
             escape_scale: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Convenience wrapper: geometry + state -> (D, A).
 
-    `kernel` may be passed in to avoid recomputing the geometry-only part, which is
-    fixed for the life of a hall.
+    `provisioning_ratio` may be a scalar or a per-rack array. `kernel` may be passed in
+    when it has already been built for the current flow ratio.
     """
     if kernel is None:
         kernel = geometric_kernel(geom, params)
