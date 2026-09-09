@@ -144,8 +144,11 @@ def main() -> None:
     n_ep = int(data["episode_id"].max()) + 1
     split = time_split(n_ep, cfg["split"]["train_frac"], cfg["split"]["val_frac"])
 
-    import torch
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    # CPU on purpose. Benchmarked with trajectories resident, MPS runs this workload
+    # about 70x slower than CPU on this machine -- 8.6 GB of unified memory with
+    # several GB already swapped, so MPS buffer allocation thrashes. See
+    # scripts/phase3_train_gnn.py::pick_device.
+    device = "cpu"
 
     print(f"hall={hall}  {data['inlet'].shape[0]:,} timesteps x {geom.n_racks} racks")
     print(f"split: train {split.train}  val {split.val}  test {split.test} (episodes)")

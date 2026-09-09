@@ -109,7 +109,7 @@ def train(data: dict, train_idx: np.ndarray, val_idx: np.ndarray, graph: HallGra
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             opt.step()
-            total += float(loss)
+            total += float(loss.detach())
         sched.step()
 
         val = _val_loss(model, data, val_idx, spec, horizon_steps, graph,

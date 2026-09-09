@@ -49,6 +49,8 @@ paper has to say so. Details and the full list of what is whose:
 | [docs/thermal-model-design.md](docs/thermal-model-design.md) | The replacement kernel: derivation, parameters, limitations |
 | [docs/data-generation.md](docs/data-generation.md) | Workload replay, placement policies, the thermal gate |
 | [docs/prediction-task.md](docs/prediction-task.md) | What the models predict, and why the control plan is an input |
+| [docs/results-phase2.md](docs/results-phase2.md) | Baseline results, and why neighbour features add almost nothing |
+| [docs/compute-constraints.md](docs/compute-constraints.md) | What this machine's 8.6 GB forced on the Phase 3 budget |
 
 ## Setup
 
@@ -106,3 +108,7 @@ data/        trace and generated trajectories (gitignored, regenerable)
   so a random split puts a sample's own near-duplicate on the other side of the boundary.
 - **Normalisation statistics come from hall_a only** and are never recomputed on hall_b
   or hall_c. `assert_no_renormalisation` guards this on every path.
+- **Train the graph model on CPU, not MPS.** With trajectories resident, MPS is about
+  70x slower on this machine. Activation memory also hits a swap cliff; the Phase 3
+  batch size and width are set from measurements, not preference. See
+  [docs/compute-constraints.md](docs/compute-constraints.md).

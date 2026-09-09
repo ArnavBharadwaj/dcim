@@ -13,30 +13,45 @@ split:
   train_frac: 0.70
   val_frac: 0.15
 
-# One sample is a whole-hall snapshot, so 2,100 samples is 420,000 rack predictions --
-# deliberately matched to the 400,000-row budget the LightGBM baseline gets, so the
-# comparison is about the model rather than about how much data each one saw.
-sample_stride: 20
+# One sample is a whole-hall snapshot, so 1,050 samples is 210,000 rack predictions,
+# against the 400,000 rows LightGBM gets. Not matched, and the reason is the machine
+# rather than the science -- see the note on batch_size below. Stated here so the
+# comparison is read with that in mind.
+sample_stride: 40
 
 model:
-  # 64 rather than a larger width: message passing over a 200-rack hall costs about
-  # 16 ms per sample on this machine either on MPS or on CPU, and the full sweep is
-  # 3 horizons x 5 seeds. Early stopping on validation loss decides the real capacity
-  # used; the smoke test reached LightGBM-level accuracy in 2 epochs.
-  hidden: 64
+  # 32 wide with 2 attention heads. This is a compute decision forced by the machine,
+  # not a modelling one: message passing retains its intermediates for the backward
+  # pass, and on 8.6 GB of unified memory with several GB already swapped, wider
+  # settings fall off a swap cliff. Measured epoch times varied THIRTY-FOLD between
+  # neighbouring configurations, and the same configuration measured 8.2 s/epoch in
+  # isolation and 110 s/epoch in a full run minutes later, depending on the machine's
+  # swap state. This is the most frugal point measured and it stays fast under load.
+  # On a machine with headroom, raise to hidden 64 / heads 4 / batch 16 / stride 20.
+  hidden: 32
   layers: 3
-  heads: 4
+  heads: 2
   aggregation: attention
   use_edge_features: true
   dropout: 0.05
 
 train:
-  epochs: 20
-  batch_size: 16
+  epochs: 15
+  # Batch 8, not because it trains better but because this machine has 8.6 GB of
+  # unified memory with several GB already swapped, and activation memory during
+  # backprop hits a cliff. Measured, one epoch at stride 40:
+  #
+  #   hidden 64, batch 16, n=2100   279.6 s      hidden 48, batch 16, n=700   155.2 s
+  #   hidden 32, batch 16, n=700      4.3 s      hidden 48, batch  4, n=420     5.4 s
+  #   hidden 48, batch  8, n=1050     8.2 s   <- this configuration
+  #
+  # Thirty-fold differences between neighbouring settings are a swap cliff, not
+  # compute. Batch 8 stays under it while keeping the data and the attention width.
+  batch_size: 8
   learning_rate: 0.001
   weight_decay: 0.0001
   grad_clip: 1.0
-  patience: 5
+  patience: 4
 
 graph:
   radius_m: 8.0
