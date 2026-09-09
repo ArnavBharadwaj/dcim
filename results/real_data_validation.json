@@ -1,0 +1,87 @@
+{
+  "nycu": {
+    "n_sensors": 135,
+    "n_rows": 1752,
+    "inlets_identical_to_outlets": true,
+    "mean_pairwise_r": 0.594589214002812,
+    "median_pairwise_r": 0.7244640994791317,
+    "frac_negative_r": 0.0771697070204533,
+    "frac_r_above_099": 0.007296849087893864,
+    "mean_within_rack_r": 0.8009980202467464,
+    "mean_across_rack_r": 0.5814838929714511,
+    "mean_spread_across_sensors_K": 15.942271689497717,
+    "max_spread_across_sensors_K": 21.08
+  },
+  "thermofoam": {
+    "baseline_spread_at_identical_load_K": 4.01651744320003,
+    "baseline_left_aisle_mean_C": 30.481974753800028,
+    "baseline_right_aisle_mean_C": 28.60695625006669,
+    "spread_by_case_K": {
+      "C00_baseline": 4.01651744320003,
+      "C01_lowSupplyVelocity": 4.257762613400018,
+      "C02_highSupplyVelocity": 1.3790029548000007,
+      "C03_warmerSupplyAir": 4.634709147999956,
+      "C04_highRackLoad": 4.414518750000013,
+      "C06_worstCase_lowFlow_highLoad": 5.42065829539996,
+      "C07_mitigation_highFlow_highLoad": 4.499776023000038
+    },
+    "overloaded_rack_response": {
+      "C05_overloadedRack_L2": {
+        "per_rack_delta_K": {
+          "L1": 4.682701988600002,
+          "L2": 3.430822159199977,
+          "L3": 6.742851363600039,
+          "R1": 7.52132727259999,
+          "R2": 4.348861363600008,
+          "R3": 2.9400039772000355
+        },
+        "delta_at_overloaded_rack_K": 3.430822159199977,
+        "max_delta_elsewhere_K": 7.52132727259999,
+        "min_delta_elsewhere_K": 2.9400039772000355
+      },
+      "C08_overloadedRack_L2_lowFlow": {
+        "per_rack_delta_K": {
+          "L1": 11.529433067799971,
+          "L2": 14.426020908999988,
+          "L3": 14.425879772600013,
+          "R1": 14.023474602199997,
+          "R2": 15.219382159199995,
+          "R3": 17.051029488600022
+        },
+        "delta_at_overloaded_rack_K": 14.426020908999988,
+        "max_delta_elsewhere_K": 17.051029488600022,
+        "min_delta_elsewhere_K": 11.529433067799971
+      },
+      "C09_overloadedRack_L2_highFlow": {
+        "per_rack_delta_K": {
+          "L1": -1.6224311934000184,
+          "L2": -2.91846403400001,
+          "L3": -0.9413964773999624,
+          "R1": -4.620932897800003,
+          "R2": -3.826694091200011,
+          "R3": -3.1007136932000208
+        },
+        "delta_at_overloaded_rack_K": -2.91846403400001,
+        "max_delta_elsewhere_K": -0.9413964773999624,
+        "min_delta_elsewhere_K": -4.620932897800003
+      }
+    }
+  },
+  "deepcool": {
+    "n_rows": 1440,
+    "d_inlet_d_setpoint": 1.6839419267087343,
+    "d_inlet_d_itload_K": 4.332549871791104,
+    "d_inlet_d_ambient": 0.9459162423282473,
+    "r2": 0.8408554215706323,
+    "abs_delta_inlet_1min_mean_K": 0.12542325648118466,
+    "abs_delta_inlet_5min_mean_K": 0.28189908812780756,
+    "abs_delta_inlet_10min_mean_K": 0.4200049484897822
+  },
+  "our_twin": {
+    "mean_pairwise_r": 0.9267638983167162,
+    "median_pairwise_r": 0.9412754850119802,
+    "frac_negative_r": 0.0,
+    "frac_r_above_099": 0.16844221105527638,
+    "mean_spread_across_racks_K": 3.3875463008880615
+  }
+}
